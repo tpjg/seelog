@@ -1,16 +1,16 @@
 // Copyright (c) 2012 - Cloud Instruments Co., Ltd.
-// 
+//
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met: 
-// 
+// modification, are permitted provided that the following conditions are met:
+//
 // 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer. 
+//    list of conditions and the following disclaimer.
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
-//    and/or other materials provided with the distribution. 
-// 
+//    and/or other materials provided with the distribution.
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 // ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 // WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -34,47 +34,64 @@ import (
 	"unicode/utf8"
 )
 
+// VerbSymbol is a special symbol used in config files to mark special format aliases.
 const (
-	VerbSymbol         = '%'
-	VerbSymbolString   = "%"
-	VerbParameterStart = '('
-	VerbParameterEnd   = ')'
-	DateDefaultFormat  = "2006-01-02"
-	TimeFormat         = "15:04:05"
+	VerbSymbol = '%'
+)
+const (
+	verbSymbolString   = "%"
+	verbParameterStart = '('
+	verbParameterEnd   = ')'
 )
 
-var Defaultformatter *formatter
+// These are the time and date formats that are used when %Date or %Time format aliases are used.
+const (
+	DateDefaultFormat = "2006-01-02"
+	TimeFormat        = "15:04:05"
+)
+
+var DefaultMsgFormat = "%Ns [%Level] %Msg%n"
+
+var defaultformatter *formatter
+var msgonlyformatter *formatter
 
 func init() {
 	var err error
-	Defaultformatter, err = newFormatter("%Ns [%Level] %Msg%n")
+	defaultformatter, err = newFormatter(DefaultMsgFormat)
 	if err != nil {
-		fmt.Println("Error during Defaultformatter creation: " + err.Error())
+		fmt.Println("Error during defaultformatter creation: " + err.Error())
+	}
+	msgonlyformatter, err = newFormatter("%Msg")
+	if err != nil {
+		fmt.Println("Error during msgonlyformatter creation: " + err.Error())
 	}
 }
 
-type verbFunc func(message string, level LogLevel, context logContextInterface) interface{}
+type verbFunc func(message string, level LogLevel, context LogContextInterface) interface{}
 type verbFuncCreator func(param string) verbFunc
 
 var verbFuncs = map[string]verbFunc{
-	"Level":    verbLevel,
-	"Lev":      verbLev,
-	"LEVEL":    verbLEVEL,
-	"LEV":      verbLEV,
-	"l":        verbl,
-	"Msg":      verbMsg,
-	"FullPath": verbFullPath,
-	"File":     verbFile,
-	"RelFile":  verbRelFile,
-	"Func":     verbFunction,
-	"Time":     verbTime,
-	"Ns":       verbNs,
-	"n":        verbn,
-	"t":        verbt,
+	"Level":     verbLevel,
+	"Lev":       verbLev,
+	"LEVEL":     verbLEVEL,
+	"LEV":       verbLEV,
+	"l":         verbl,
+	"Msg":       verbMsg,
+	"FullPath":  verbFullPath,
+	"File":      verbFile,
+	"RelFile":   verbRelFile,
+	"Func":      verbFunction,
+	"FuncShort": verbFunctionShort,
+	"Line":      verbLine,
+	"Time":      verbTime,
+	"Ns":        verbNs,
+	"n":         verbn,
+	"t":         verbt,
 }
 
 var verbFuncsParametrized = map[string]verbFuncCreator{
 	"Date": createDateTimeVerbFunc,
+	"EscM": createANSIEscapeFunc,
 }
 
 // formatter is used to write messages in a specific format, inserting such additional data
@@ -110,12 +127,12 @@ func (formatter *formatter) buildVerbFuncs() error {
 
 		isEndOfStr := i == len(formatter.fmtStringOriginal)-1
 		if isEndOfStr {
-			return errors.New(fmt.Sprintf("Format error: %v - last symbol", VerbSymbolString))
+			return errors.New(fmt.Sprintf("Format error: %v - last symbol", verbSymbolString))
 		}
 
 		isDoubledVerbSymbol := formatter.fmtStringOriginal[i+1] == VerbSymbol
 		if isDoubledVerbSymbol {
-			fmtString += VerbSymbolString
+			fmtString += verbSymbolString
 			i++
 			continue
 		}
@@ -137,7 +154,7 @@ func (formatter *formatter) buildVerbFuncs() error {
 func (formatter *formatter) extractVerbFunc(index int) (verbFunc, int, error) {
 	letterSequence := formatter.extractLetterSequence(index)
 	if len(letterSequence) == 0 {
-		return nil, 0, errors.New(fmt.Sprintf("Format error: lack of verb after %v. At %v", VerbSymbolString, index))
+		return nil, 0, errors.New(fmt.Sprintf("Format error: lack of verb after %v. At %v", verbSymbolString, index))
 	}
 
 	function, verbLength, ok := formatter.findVerbFunc(letterSequence)
@@ -210,11 +227,11 @@ func (formatter *formatter) findVerbFuncParametrized(letters string, lettersStar
 }
 
 func (formatter *formatter) findparameter(startIndex int) (string, int, bool) {
-	if len(formatter.fmtStringOriginal) == startIndex || formatter.fmtStringOriginal[startIndex] != VerbParameterStart {
+	if len(formatter.fmtStringOriginal) == startIndex || formatter.fmtStringOriginal[startIndex] != verbParameterStart {
 		return "", 0, false
 	}
 
-	endIndex := strings.Index(formatter.fmtStringOriginal[startIndex:], string(VerbParameterEnd)) + startIndex
+	endIndex := strings.Index(formatter.fmtStringOriginal[startIndex:], string(verbParameterEnd)) + startIndex
 	if endIndex == -1 {
 		return "", 0, false
 	}
@@ -226,7 +243,7 @@ func (formatter *formatter) findparameter(startIndex int) (string, int, bool) {
 
 // Format processes a message with special verbs, log level, and context. Returns formatted string
 // with all verb identifiers changed to appropriate values.
-func (formatter *formatter) Format(message string, level LogLevel, context logContextInterface) string {
+func (formatter *formatter) Format(message string, level LogLevel, context LogContextInterface) string {
 	if len(formatter.verbFuncs) == 0 {
 		return formatter.fmtString
 	}
@@ -246,7 +263,8 @@ func (formatter *formatter) String() string {
 //=====================================================
 
 const (
-	wrongLogLevel = "WRONG_LOGLEVEL"
+	wrongLogLevel   = "WRONG_LOGLEVEL"
+	wrongEscapeCode = "WRONG_ESCAPE"
 )
 
 var levelToString = map[LogLevel]string{
@@ -279,7 +297,7 @@ var levelToShortestString = map[LogLevel]string{
 	Off:         "o",
 }
 
-func verbLevel(message string, level LogLevel, context logContextInterface) interface{} {
+func verbLevel(message string, level LogLevel, context LogContextInterface) interface{} {
 	levelStr, ok := levelToString[level]
 	if !ok {
 		return wrongLogLevel
@@ -287,7 +305,7 @@ func verbLevel(message string, level LogLevel, context logContextInterface) inte
 	return levelStr
 }
 
-func verbLev(message string, level LogLevel, context logContextInterface) interface{} {
+func verbLev(message string, level LogLevel, context LogContextInterface) interface{} {
 	levelStr, ok := levelToShortString[level]
 	if !ok {
 		return wrongLogLevel
@@ -295,15 +313,15 @@ func verbLev(message string, level LogLevel, context logContextInterface) interf
 	return levelStr
 }
 
-func verbLEVEL(message string, level LogLevel, context logContextInterface) interface{} {
+func verbLEVEL(message string, level LogLevel, context LogContextInterface) interface{} {
 	return strings.ToTitle(verbLevel(message, level, context).(string))
 }
 
-func verbLEV(message string, level LogLevel, context logContextInterface) interface{} {
+func verbLEV(message string, level LogLevel, context LogContextInterface) interface{} {
 	return strings.ToTitle(verbLev(message, level, context).(string))
 }
 
-func verbl(message string, level LogLevel, context logContextInterface) interface{} {
+func verbl(message string, level LogLevel, context LogContextInterface) interface{} {
 	levelStr, ok := levelToShortestString[level]
 	if !ok {
 		return wrongLogLevel
@@ -311,39 +329,49 @@ func verbl(message string, level LogLevel, context logContextInterface) interfac
 	return levelStr
 }
 
-func verbMsg(message string, level LogLevel, context logContextInterface) interface{} {
+func verbMsg(message string, level LogLevel, context LogContextInterface) interface{} {
 	return message
 }
 
-func verbFullPath(message string, level LogLevel, context logContextInterface) interface{} {
+func verbFullPath(message string, level LogLevel, context LogContextInterface) interface{} {
 	return context.FullPath()
 }
 
-func verbFile(message string, level LogLevel, context logContextInterface) interface{} {
+func verbFile(message string, level LogLevel, context LogContextInterface) interface{} {
 	return context.FileName()
 }
 
-func verbRelFile(message string, level LogLevel, context logContextInterface) interface{} {
+func verbRelFile(message string, level LogLevel, context LogContextInterface) interface{} {
 	return context.ShortPath()
 }
 
-func verbFunction(message string, level LogLevel, context logContextInterface) interface{} {
+func verbFunction(message string, level LogLevel, context LogContextInterface) interface{} {
 	return context.Func()
 }
 
-func verbTime(message string, level LogLevel, context logContextInterface) interface{} {
+func verbFunctionShort(message string, level LogLevel, context LogContextInterface) interface{} {
+	f := context.Func()
+	spl := strings.Split(f, ".")
+	return spl[len(spl)-1]
+}
+
+func verbLine(message string, level LogLevel, context LogContextInterface) interface{} {
+	return context.Line()
+}
+
+func verbTime(message string, level LogLevel, context LogContextInterface) interface{} {
 	return context.CallTime().Format(TimeFormat)
 }
 
-func verbNs(message string, level LogLevel, context logContextInterface) interface{} {
+func verbNs(message string, level LogLevel, context LogContextInterface) interface{} {
 	return context.CallTime().UnixNano()
 }
 
-func verbn(message string, level LogLevel, context logContextInterface) interface{} {
+func verbn(message string, level LogLevel, context LogContextInterface) interface{} {
 	return "\n"
 }
 
-func verbt(message string, level LogLevel, context logContextInterface) interface{} {
+func verbt(message string, level LogLevel, context LogContextInterface) interface{} {
 	return "\t"
 }
 
@@ -352,7 +380,17 @@ func createDateTimeVerbFunc(dateTimeFormat string) verbFunc {
 	if format == "" {
 		format = DateDefaultFormat
 	}
-	return func(message string, level LogLevel, context logContextInterface) interface{} {
+	return func(message string, level LogLevel, context LogContextInterface) interface{} {
 		return time.Now().Format(format)
+	}
+}
+
+func createANSIEscapeFunc(escapeCodeString string) verbFunc {
+	return func(message string, level LogLevel, context LogContextInterface) interface{} {
+		if len(escapeCodeString) == 0 {
+			return wrongEscapeCode
+		}
+
+		return fmt.Sprintf("%c[%sm", 0x1B, escapeCodeString)
 	}
 }

@@ -1,16 +1,16 @@
 // Copyright (c) 2012 - Cloud Instruments Co., Ltd.
-// 
+//
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met: 
-// 
+// modification, are permitted provided that the following conditions are met:
+//
 // 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer. 
+//    list of conditions and the following disclaimer.
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
-//    and/or other materials provided with the distribution. 
-// 
+//    and/or other materials provided with the distribution.
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 // ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 // WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -28,10 +28,9 @@ import (
 	"errors"
 	"strconv"
 	"testing"
-	"time"
 )
 
-// bytesVerifier is a byte receiver which is used for correct input testing. 
+// bytesVerifier is a byte receiver which is used for correct input testing.
 // It allows to compare expected result and actual result in context of received bytes.
 type bytesVerifier struct {
 	expectedBytes   []byte // bytes that are expected to be written in next Write call
@@ -91,7 +90,7 @@ func (verifier *bytesVerifier) ExpectBytes(bytes []byte) {
 
 func (verifier *bytesVerifier) MustNotExpect() {
 	if verifier.waitingForInput {
-		errorText := "Writer must not expect: "
+		errorText := "Unexpected input: "
 
 		if verifier.expectedBytes != nil {
 			errorText += "len = " + strconv.Itoa(len(verifier.expectedBytes))
@@ -100,17 +99,6 @@ func (verifier *bytesVerifier) MustNotExpect() {
 
 		verifier.testEnv.Errorf(errorText)
 	}
-}
-
-func (verifier *bytesVerifier) MustNotExpectWithDelay(delay time.Duration) {
-	c := make(chan int)
-	time.AfterFunc(delay, func() {
-		verifier.MustNotExpect()
-
-		c <- 1
-	})
-
-	<-c
 }
 
 func (verifier *bytesVerifier) Close() error {

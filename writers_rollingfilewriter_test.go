@@ -1,16 +1,16 @@
 // Copyright (c) 2012 - Cloud Instruments Co., Ltd.
-// 
+//
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met: 
-// 
+// modification, are permitted provided that the following conditions are met:
+//
 // 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer. 
+//    list of conditions and the following disclaimer.
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
-//    and/or other materials provided with the distribution. 
-// 
+//    and/or other materials provided with the distribution.
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 // ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 // WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -25,53 +25,73 @@
 package seelog
 
 import (
+	"fmt"
 	"io"
 	"testing"
 )
 
-func TestrollingFileWriter(t *testing.T) {
-	newfileWriterTester(rollingfileWriterTests, rollingfileWriterGetter, t).test()
+// fileWriterTestCase is declared in writers_filewriter_test.go
+
+func createRollingSizeFileWriterTestCase(
+	files []string,
+	fileName string,
+	fileSize int64,
+	maxRolls int,
+	writeCount int,
+	resFiles []string) *fileWriterTestCase {
+
+	return &fileWriterTestCase{files, fileName, rollingTypeSize, fileSize, maxRolls, "", writeCount, resFiles}
+}
+
+func createRollingDatefileWriterTestCase(
+	files []string,
+	fileName string,
+	datePattern string,
+	writeCount int,
+	resFiles []string) *fileWriterTestCase {
+
+	return &fileWriterTestCase{files, fileName, rollingTypeTime, 0, 0, datePattern, writeCount, resFiles}
+}
+
+func TestRollingFileWriter(t *testing.T) {
+	t.Logf("Starting rolling file writer tests")
+	newFileWriterTester(rollingfileWriterTests, rollingFileWriterGetter, t).test()
 }
 
 //===============================================================
 
-func rollingfileWriterGetter(testCase *fileWriterTestCase) (io.Writer, error) {
-	if testCase.rollingType == Size {
-		return newRollingFileWriterSize(testCase.fileName, testCase.fileSize, testCase.maxRolls)
-	} else if testCase.rollingType == Date {
-		return newRollingFileWriterDate(testCase.fileName, testCase.datePattern)
+func rollingFileWriterGetter(testCase *fileWriterTestCase) (io.WriteCloser, error) {
+	if testCase.rollingType == rollingTypeSize {
+		return newRollingFileWriterSize(testCase.fileName, rollingArchiveNone, "", testCase.fileSize, testCase.maxRolls)
+	} else if testCase.rollingType == rollingTypeTime {
+		return newRollingFileWriterTime(testCase.fileName, rollingArchiveNone, "", -1, testCase.datePattern, rollingIntervalDaily)
 	}
 
-	panic("Incorrect rollingType")
+	return nil, fmt.Errorf("Incorrect rollingType")
 }
 
 //===============================================================
-
 var rollingfileWriterTests []*fileWriterTestCase = []*fileWriterTestCase{
-	createRollingSizefileWriterTestCase([]string{}, "log.txt", 10, 10, 1, []string{"log.txt"}),
-	createRollingSizefileWriterTestCase([]string{}, "log.txt", 10, 10, 2, []string{"log.txt", "log.txt.1"}),
-	createRollingSizefileWriterTestCase([]string{"log.txt.1"}, "log.txt", 10, 10, 2, []string{"log.txt", "log.txt.1", "log.txt.2"}),
-	createRollingSizefileWriterTestCase([]string{"log.txt.1"}, "log.txt", 10, 1, 2, []string{"log.txt", "log.txt.2"}),
-	createRollingSizefileWriterTestCase([]string{}, "log.txt", 10, 1, 2, []string{"log.txt", "log.txt.1"}),
-	createRollingSizefileWriterTestCase([]string{"log.txt.9"}, "log.txt", 10, 1, 2, []string{"log.txt", "log.txt.10"}),
-	createRollingSizefileWriterTestCase([]string{"log.txt.a", "log.txt.1b"}, "log.txt", 10, 1, 2, []string{"log.txt", "log.txt.1", "log.txt.a", "log.txt.1b"}),
-
-	createRollingSizefileWriterTestCase([]string{}, `dir/log.txt`, 10, 10, 1, []string{`dir/log.txt`}),
-	createRollingSizefileWriterTestCase([]string{}, `dir/log.txt`, 10, 10, 2, []string{`dir/log.txt`, `dir/log.txt.1`}),
-	createRollingSizefileWriterTestCase([]string{`dir/dir/log.txt.1`}, `dir/dir/log.txt`, 10, 10, 2, []string{`dir/dir/log.txt`, `dir/dir/log.txt.1`, `dir/dir/log.txt.2`}),
-	createRollingSizefileWriterTestCase([]string{`dir/dir/dir/log.txt.1`}, `dir/dir/dir/log.txt`, 10, 1, 2, []string{`dir/dir/dir/log.txt`, `dir/dir/dir/log.txt.2`}),
-	createRollingSizefileWriterTestCase([]string{}, `./log.txt`, 10, 1, 2, []string{`log.txt`, `log.txt.1`}),
-	createRollingSizefileWriterTestCase([]string{`././././log.txt.9`}, `log.txt`, 10, 1, 2, []string{`log.txt`, `log.txt.10`}),
-	createRollingSizefileWriterTestCase([]string{"dir/dir/log.txt.a", "dir/dir/log.txt.1b"}, "dir/dir/log.txt", 10, 1, 2, []string{"dir/dir/log.txt", "dir/dir/log.txt.1", "dir/dir/log.txt.a", "dir/dir/log.txt.1b"}),
-
-	createRollingSizefileWriterTestCase([]string{}, `././dir/log.txt`, 10, 10, 1, []string{`dir/log.txt`}),
-	createRollingSizefileWriterTestCase([]string{}, `././dir/log.txt`, 10, 10, 2, []string{`dir/log.txt`, `dir/log.txt.1`}),
-	createRollingSizefileWriterTestCase([]string{`././dir/dir/log.txt.1`}, `dir/dir/log.txt`, 10, 10, 2, []string{`dir/dir/log.txt`, `dir/dir/log.txt.1`, `dir/dir/log.txt.2`}),
-	createRollingSizefileWriterTestCase([]string{`././dir/dir/dir/log.txt.1`}, `dir/dir/dir/log.txt`, 10, 1, 2, []string{`dir/dir/dir/log.txt`, `dir/dir/dir/log.txt.2`}),
-	createRollingSizefileWriterTestCase([]string{}, `././log.txt`, 10, 1, 2, []string{`log.txt`, `log.txt.1`}),
-	createRollingSizefileWriterTestCase([]string{`././././log.txt.9`}, `log.txt`, 10, 1, 2, []string{`log.txt`, `log.txt.10`}),
-	createRollingSizefileWriterTestCase([]string{"././dir/dir/log.txt.a", "././dir/dir/log.txt.1b"}, "dir/dir/log.txt", 10, 1, 2, []string{"dir/dir/log.txt", "dir/dir/log.txt.1", "dir/dir/log.txt.a", "dir/dir/log.txt.1b"}),
-
-	//createRollingDatefileWriterTestCase([]string{}, "log.txt", "02.01.2006", 1, []string{}),
-	//createRollingDatefileWriterTestCase([]string{}, "log.txt", "02.01.2006.000000", 2, []string{}),
+	createRollingSizeFileWriterTestCase([]string{}, "log.testlog", 10, 10, 1, []string{"log.testlog"}),
+	createRollingSizeFileWriterTestCase([]string{}, "log.testlog", 10, 10, 2, []string{"log.testlog", "log.testlog.1"}),
+	createRollingSizeFileWriterTestCase([]string{"log.testlog.1"}, "log.testlog", 10, 10, 2, []string{"log.testlog", "log.testlog.1", "log.testlog.2"}),
+	createRollingSizeFileWriterTestCase([]string{"log.testlog.1"}, "log.testlog", 10, 1, 2, []string{"log.testlog", "log.testlog.2"}),
+	createRollingSizeFileWriterTestCase([]string{}, "log.testlog", 10, 1, 2, []string{"log.testlog", "log.testlog.1"}),
+	createRollingSizeFileWriterTestCase([]string{"log.testlog.9"}, "log.testlog", 10, 1, 2, []string{"log.testlog", "log.testlog.10"}),
+	createRollingSizeFileWriterTestCase([]string{"log.testlog.a", "log.testlog.1b"}, "log.testlog", 10, 1, 2, []string{"log.testlog", "log.testlog.1", "log.testlog.a", "log.testlog.1b"}),
+	createRollingSizeFileWriterTestCase([]string{}, `dir/log.testlog`, 10, 10, 1, []string{`dir/log.testlog`}),
+	createRollingSizeFileWriterTestCase([]string{}, `dir/log.testlog`, 10, 10, 2, []string{`dir/log.testlog`, `dir/log.testlog.1`}),
+	createRollingSizeFileWriterTestCase([]string{`dir/dir/log.testlog.1`}, `dir/dir/log.testlog`, 10, 10, 2, []string{`dir/dir/log.testlog`, `dir/dir/log.testlog.1`, `dir/dir/log.testlog.2`}),
+	createRollingSizeFileWriterTestCase([]string{`dir/dir/dir/log.testlog.1`}, `dir/dir/dir/log.testlog`, 10, 1, 2, []string{`dir/dir/dir/log.testlog`, `dir/dir/dir/log.testlog.2`}),
+	createRollingSizeFileWriterTestCase([]string{}, `./log.testlog`, 10, 1, 2, []string{`log.testlog`, `log.testlog.1`}),
+	createRollingSizeFileWriterTestCase([]string{`././././log.testlog.9`}, `log.testlog`, 10, 1, 2, []string{`log.testlog`, `log.testlog.10`}),
+	createRollingSizeFileWriterTestCase([]string{"dir/dir/log.testlog.a", "dir/dir/log.testlog.1b"}, "dir/dir/log.testlog", 10, 1, 2, []string{"dir/dir/log.testlog", "dir/dir/log.testlog.1", "dir/dir/log.testlog.a", "dir/dir/log.testlog.1b"}),
+	createRollingSizeFileWriterTestCase([]string{}, `././dir/log.testlog`, 10, 10, 1, []string{`dir/log.testlog`}),
+	createRollingSizeFileWriterTestCase([]string{}, `././dir/log.testlog`, 10, 10, 2, []string{`dir/log.testlog`, `dir/log.testlog.1`}),
+	createRollingSizeFileWriterTestCase([]string{`././dir/dir/log.testlog.1`}, `dir/dir/log.testlog`, 10, 10, 2, []string{`dir/dir/log.testlog`, `dir/dir/log.testlog.1`, `dir/dir/log.testlog.2`}),
+	createRollingSizeFileWriterTestCase([]string{`././dir/dir/dir/log.testlog.1`}, `dir/dir/dir/log.testlog`, 10, 1, 2, []string{`dir/dir/dir/log.testlog`, `dir/dir/dir/log.testlog.2`}),
+	createRollingSizeFileWriterTestCase([]string{}, `././log.testlog`, 10, 1, 2, []string{`log.testlog`, `log.testlog.1`}),
+	createRollingSizeFileWriterTestCase([]string{`././././log.testlog.9`}, `log.testlog`, 10, 1, 2, []string{`log.testlog`, `log.testlog.10`}),
+	createRollingSizeFileWriterTestCase([]string{"././dir/dir/log.testlog.a", "././dir/dir/log.testlog.1b"}, "dir/dir/log.testlog", 10, 1, 2, []string{"dir/dir/log.testlog", "dir/dir/log.testlog.1", "dir/dir/log.testlog.a", "dir/dir/log.testlog.1b"}),
+	// ====================
 }

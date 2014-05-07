@@ -1,16 +1,16 @@
 // Copyright (c) 2012 - Cloud Instruments Co., Ltd.
-// 
+//
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met: 
-// 
+// modification, are permitted provided that the following conditions are met:
+//
 // 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer. 
+//    list of conditions and the following disclaimer.
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
-//    and/or other materials provided with the distribution. 
-// 
+//    and/or other materials provided with the distribution.
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 // ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 // WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -26,26 +26,26 @@ package seelog
 
 import (
 	"container/list"
-	"sync"
-	"fmt"
 	"errors"
+	"fmt"
+	"sync"
 )
 
+// MaxQueueSize is the critical number of messages in the queue that result in an immediate flush.
 const (
 	MaxQueueSize = 10000
 )
 
 type msgQueueItem struct {
 	level   LogLevel
-	context logContextInterface
-	message  fmt.Stringer
+	context LogContextInterface
+	message fmt.Stringer
 }
 
 // asyncLogger represents common data for all asynchronous loggers
 type asyncLogger struct {
 	commonLogger
 	msgQueue         *list.List
-	queueMutex       *sync.Mutex
 	queueHasElements *sync.Cond
 }
 
@@ -54,7 +54,6 @@ func newAsyncLogger(config *logConfig) *asyncLogger {
 	asnLogger := new(asyncLogger)
 
 	asnLogger.msgQueue = list.New()
-	asnLogger.queueMutex = new(sync.Mutex)
 	asnLogger.queueHasElements = sync.NewCond(new(sync.Mutex))
 
 	asnLogger.commonLogger = *newCommonLogger(config, asnLogger)
@@ -64,37 +63,43 @@ func newAsyncLogger(config *logConfig) *asyncLogger {
 
 func (asnLogger *asyncLogger) innerLog(
 	level LogLevel,
-	context logContextInterface,
+	context LogContextInterface,
 	message fmt.Stringer) {
 
 	asnLogger.addMsgToQueue(level, context, message)
 }
 
 func (asnLogger *asyncLogger) Close() {
-	asnLogger.queueMutex.Lock()
-	defer asnLogger.queueMutex.Unlock()
+	asnLogger.m.Lock()
+	defer asnLogger.m.Unlock()
 
 	if !asnLogger.closed {
-		asnLogger.flushQueue()
+		asnLogger.flushQueue(true)
 		asnLogger.config.RootDispatcher.Flush()
-		asnLogger.config.RootDispatcher.Close()
+
+		if err := asnLogger.config.RootDispatcher.Close(); err != nil {
+			reportInternalError(err)
+		}
+
 		asnLogger.queueHasElements.Broadcast()
 	}
 }
 
 func (asnLogger *asyncLogger) Flush() {
-	asnLogger.queueMutex.Lock()
-	defer asnLogger.queueMutex.Unlock()
+	asnLogger.m.Lock()
+	defer asnLogger.m.Unlock()
 
 	if !asnLogger.closed {
-		asnLogger.flushQueue()
+		asnLogger.flushQueue(true)
 		asnLogger.config.RootDispatcher.Flush()
 	}
 }
 
-func (asnLogger *asyncLogger) flushQueue() {
-	asnLogger.queueHasElements.L.Lock()
-	defer asnLogger.queueHasElements.L.Unlock()
+func (asnLogger *asyncLogger) flushQueue(lockNeeded bool) {
+	if lockNeeded {
+		asnLogger.queueHasElements.L.Lock()
+		defer asnLogger.queueHasElements.L.Unlock()
+	}
 
 	for asnLogger.msgQueue.Len() > 0 {
 		asnLogger.processQueueElement()
@@ -112,21 +117,19 @@ func (asnLogger *asyncLogger) processQueueElement() {
 
 func (asnLogger *asyncLogger) addMsgToQueue(
 	level LogLevel,
-	context logContextInterface,
+	context LogContextInterface,
 	message fmt.Stringer) {
-	asnLogger.queueMutex.Lock()
-	defer asnLogger.queueMutex.Unlock()
 
 	if !asnLogger.closed {
-		if asnLogger.msgQueue.Len() >= MaxQueueSize {
-			fmt.Printf("Seelog queue overflow: more than %v messages in the queue. Flushing.\n", MaxQueueSize)
-			asnLogger.flushQueue()
-		}
-		
-		queueItem := msgQueueItem{level, context, message}
-
 		asnLogger.queueHasElements.L.Lock()
 		defer asnLogger.queueHasElements.L.Unlock()
+
+		if asnLogger.msgQueue.Len() >= MaxQueueSize {
+			fmt.Printf("Seelog queue overflow: more than %v messages in the queue. Flushing.\n", MaxQueueSize)
+			asnLogger.flushQueue(false)
+		}
+
+		queueItem := msgQueueItem{level, context, message}
 
 		asnLogger.msgQueue.PushBack(queueItem)
 		asnLogger.queueHasElements.Broadcast()

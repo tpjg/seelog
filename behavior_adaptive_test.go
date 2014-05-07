@@ -1,16 +1,16 @@
 // Copyright (c) 2012 - Cloud Instruments Co., Ltd.
-// 
+//
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met: 
-// 
+// modification, are permitted provided that the following conditions are met:
+//
 // 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer. 
+//    list of conditions and the following disclaimer.
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
-//    and/or other materials provided with the distribution. 
-// 
+//    and/or other materials provided with the distribution.
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 // ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 // WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -25,12 +25,52 @@
 package seelog
 
 import (
+	"bufio"
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"io/ioutil"
 	"strconv"
 	"testing"
 )
 
+func countSequencedRowsInFile(filePath string) (int64, error) {
+	bts, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return 0, err
+	}
+
+	bufReader := bufio.NewReader(bytes.NewBuffer(bts))
+
+	var gotCounter int64
+	for {
+		line, _, bufErr := bufReader.ReadLine()
+		if bufErr != nil && bufErr != io.EOF {
+			return 0, bufErr
+		}
+
+		lineString := string(line)
+		if lineString == "" {
+			break
+		}
+
+		intVal, atoiErr := strconv.ParseInt(lineString, 10, 64)
+		if atoiErr != nil {
+			return 0, atoiErr
+		}
+
+		if intVal != gotCounter {
+			return 0, errors.New(fmt.Sprintf("Wrong order: %d Expected: %d\n", intVal, gotCounter))
+		}
+
+		gotCounter++
+	}
+
+	return gotCounter, nil
+}
+
 func Test_Adaptive(t *testing.T) {
-	switchToRealFSWrapper()
 	fileName := "beh_test_adaptive.log"
 	count := 100
 

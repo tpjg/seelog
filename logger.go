@@ -1,16 +1,16 @@
 // Copyright (c) 2012 - Cloud Instruments Co., Ltd.
-// 
+//
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are met: 
-// 
+// modification, are permitted provided that the following conditions are met:
+//
 // 1. Redistributions of source code must retain the above copyright notice, this
-//    list of conditions and the following disclaimer. 
+//    list of conditions and the following disclaimer.
 // 2. Redistributions in binary form must reproduce the above copyright notice,
 //    this list of conditions and the following disclaimer in the documentation
-//    and/or other materials provided with the distribution. 
-// 
+//    and/or other materials provided with the distribution.
+//
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 // ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 // WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -25,7 +25,9 @@
 package seelog
 
 import (
+	"errors"
 	"fmt"
+	"sync"
 )
 
 func reportInternalError(err error) {
@@ -34,19 +36,54 @@ func reportInternalError(err error) {
 
 // LoggerInterface represents structs capable of logging Seelog messages
 type LoggerInterface interface {
-	Tracef(format string, params ...interface{})
-	Debugf(format string, params ...interface{})
-	Infof(format string, params ...interface{})
-	Warnf(format string, params ...interface{})
-	Errorf(format string, params ...interface{})
-	Criticalf(format string, params ...interface{})
 
+	// Tracef formats message according to format specifier
+	// and writes to log with level = Trace.
+	Tracef(format string, params ...interface{})
+
+	// Debugf formats message according to format specifier
+	// and writes to log with level = Debug.
+	Debugf(format string, params ...interface{})
+
+	// Infof formats message according to format specifier
+	// and writes to log with level = Info.
+	Infof(format string, params ...interface{})
+
+	// Warnf formats message according to format specifier
+	// and writes to log with level = Warn.
+	Warnf(format string, params ...interface{}) error
+
+	// Errorf formats message according to format specifier
+	// and writes to log with level = Error.
+	Errorf(format string, params ...interface{}) error
+
+	// Criticalf formats message according to format specifier
+	// and writes to log with level = Critical.
+	Criticalf(format string, params ...interface{}) error
+
+	// Trace formats message using the default formats for its operands
+	// and writes to log with level = Trace
 	Trace(v ...interface{})
+
+	// Debug formats message using the default formats for its operands
+	// and writes to log with level = Debug
 	Debug(v ...interface{})
+
+	// Info formats message using the default formats for its operands
+	// and writes to log with level = Info
 	Info(v ...interface{})
-	Warn(v ...interface{})
-	Error(v ...interface{})
-	Critical(v ...interface{})
+
+	// Warn formats message using the default formats for its operands
+	// and writes to log with level = Warn
+	Warn(v ...interface{}) error
+
+	// Error formats message using the default formats for its operands
+	// and writes to log with level = Error
+	Error(v ...interface{}) error
+
+	// Critical formats message using the default formats for its operands
+	// and writes to log with level = Critical
+	Critical(v ...interface{}) error
 
 	traceWithCallDepth(callDepth int, message fmt.Stringer)
 	debugWithCallDepth(callDepth int, message fmt.Stringer)
@@ -58,11 +95,23 @@ type LoggerInterface interface {
 	Close()
 	Flush()
 	Closed() bool
+
+	// SetAdditionalStackDepth sets the additional number of frames to skip by runtime.Caller
+	// when getting function information needed to print seelog format identifiers such as %Func or %File.
+	//
+	// This func may be used when you wrap seelog funcs and want to print caller info of you own
+	// wrappers instead of seelog func callers. In this case you should set depth = 1. If you then
+	// wrap your wrapper, you should set depth = 2, etc.
+	//
+	// NOTE: Incorrect depth value may lead to errors in runtime.Caller evaluation or incorrect
+	// function/file names in log files. Do not use it if you are not going to wrap seelog funcs.
+	// You may reset the value to default using a SetAdditionalStackDepth(0) call.
+	SetAdditionalStackDepth(depth int) error
 }
 
 // innerLoggerInterface is an internal logging interface
 type innerLoggerInterface interface {
-	innerLog(level LogLevel, context logContextInterface, message fmt.Stringer)
+	innerLog(level LogLevel, context LogContextInterface, message fmt.Stringer)
 	Flush()
 }
 
@@ -71,11 +120,13 @@ type allowedContextCache map[string]map[string]map[LogLevel]bool
 
 // commonLogger contains all common data needed for logging and contains methods used to log messages.
 type commonLogger struct {
-	config       *logConfig          // Config used for logging
-	contextCache allowedContextCache // Caches whether log is enabled for specific "full path-func name-level" sets
-	closed       bool                // 'true' when all writers are closed, all data is flushed, logger is unusable.
-	unusedLevels []bool
-	innerLogger  innerLoggerInterface
+	config        *logConfig          // Config used for logging
+	contextCache  allowedContextCache // Caches whether log is enabled for specific "full path-func name-level" sets
+	closed        bool                // 'true' when all writers are closed, all data is flushed, logger is unusable.
+	m             sync.Mutex          // Mutex for main operations
+	unusedLevels  []bool
+	innerLogger   innerLoggerInterface
+	addStackDepth int // Additional stack depth needed for correct seelog caller context detection
 }
 
 func newCommonLogger(config *logConfig, internalLogger innerLoggerInterface) *commonLogger {
@@ -90,6 +141,14 @@ func newCommonLogger(config *logConfig, internalLogger innerLoggerInterface) *co
 	return cLogger
 }
 
+func (cLogger *commonLogger) SetAdditionalStackDepth(depth int) error {
+	if depth < 0 {
+		return fmt.Errorf("negative depth: %d", depth)
+	}
+	cLogger.addStackDepth = depth
+	return nil
+}
+
 func (cLogger *commonLogger) Tracef(format string, params ...interface{}) {
 	cLogger.traceWithCallDepth(loggerFuncCallDepth, newLogFormattedMessage(format, params))
 }
@@ -102,16 +161,22 @@ func (cLogger *commonLogger) Infof(format string, params ...interface{}) {
 	cLogger.infoWithCallDepth(loggerFuncCallDepth, newLogFormattedMessage(format, params))
 }
 
-func (cLogger *commonLogger) Warnf(format string, params ...interface{}) {
-	cLogger.warnWithCallDepth(loggerFuncCallDepth, newLogFormattedMessage(format, params))
+func (cLogger *commonLogger) Warnf(format string, params ...interface{}) error {
+	message := newLogFormattedMessage(format, params)
+	cLogger.warnWithCallDepth(loggerFuncCallDepth, message)
+	return errors.New(message.String())
 }
 
-func (cLogger *commonLogger) Errorf(format string, params ...interface{}) {
-	cLogger.errorWithCallDepth(loggerFuncCallDepth, newLogFormattedMessage(format, params))
+func (cLogger *commonLogger) Errorf(format string, params ...interface{}) error {
+	message := newLogFormattedMessage(format, params)
+	cLogger.errorWithCallDepth(loggerFuncCallDepth, message)
+	return errors.New(message.String())
 }
 
-func (cLogger *commonLogger) Criticalf(format string, params ...interface{}) {
-	cLogger.criticalWithCallDepth(loggerFuncCallDepth, newLogFormattedMessage(format, params))
+func (cLogger *commonLogger) Criticalf(format string, params ...interface{}) error {
+	message := newLogFormattedMessage(format, params)
+	cLogger.criticalWithCallDepth(loggerFuncCallDepth, message)
+	return errors.New(message.String())
 }
 
 func (cLogger *commonLogger) Trace(v ...interface{}) {
@@ -126,40 +191,46 @@ func (cLogger *commonLogger) Info(v ...interface{}) {
 	cLogger.infoWithCallDepth(loggerFuncCallDepth, newLogMessage(v))
 }
 
-func (cLogger *commonLogger) Warn(v ...interface{}) {
-	cLogger.warnWithCallDepth(loggerFuncCallDepth, newLogMessage(v))
+func (cLogger *commonLogger) Warn(v ...interface{}) error {
+	message := newLogMessage(v)
+	cLogger.warnWithCallDepth(loggerFuncCallDepth, message)
+	return errors.New(message.String())
 }
 
-func (cLogger *commonLogger) Error(v ...interface{}) {
-	cLogger.errorWithCallDepth(loggerFuncCallDepth, newLogMessage(v))
+func (cLogger *commonLogger) Error(v ...interface{}) error {
+	message := newLogMessage(v)
+	cLogger.errorWithCallDepth(loggerFuncCallDepth, message)
+	return errors.New(message.String())
 }
 
-func (cLogger *commonLogger) Critical(v ...interface{}) {
-	cLogger.criticalWithCallDepth(loggerFuncCallDepth, newLogMessage(v))
+func (cLogger *commonLogger) Critical(v ...interface{}) error {
+	message := newLogMessage(v)
+	cLogger.criticalWithCallDepth(loggerFuncCallDepth, message)
+	return errors.New(message.String())
 }
 
 func (cLogger *commonLogger) traceWithCallDepth(callDepth int, message fmt.Stringer) {
-	cLogger.log(TraceLvl, message, callDepth)
+	cLogger.log(TraceLvl, message, callDepth+cLogger.addStackDepth)
 }
 
 func (cLogger *commonLogger) debugWithCallDepth(callDepth int, message fmt.Stringer) {
-	cLogger.log(DebugLvl, message, callDepth)
+	cLogger.log(DebugLvl, message, callDepth+cLogger.addStackDepth)
 }
 
 func (cLogger *commonLogger) infoWithCallDepth(callDepth int, message fmt.Stringer) {
-	cLogger.log(InfoLvl, message, callDepth)
+	cLogger.log(InfoLvl, message, callDepth+cLogger.addStackDepth)
 }
 
 func (cLogger *commonLogger) warnWithCallDepth(callDepth int, message fmt.Stringer) {
-	cLogger.log(WarnLvl, message, callDepth)
+	cLogger.log(WarnLvl, message, callDepth+cLogger.addStackDepth)
 }
 
 func (cLogger *commonLogger) errorWithCallDepth(callDepth int, message fmt.Stringer) {
-	cLogger.log(ErrorLvl, message, callDepth)
+	cLogger.log(ErrorLvl, message, callDepth+cLogger.addStackDepth)
 }
 
 func (cLogger *commonLogger) criticalWithCallDepth(callDepth int, message fmt.Stringer) {
-	cLogger.log(CriticalLvl, message, callDepth)
+	cLogger.log(CriticalLvl, message, callDepth+cLogger.addStackDepth)
 	cLogger.innerLogger.Flush()
 }
 
@@ -188,12 +259,14 @@ func (cLogger *commonLogger) fillUnusedLevelsByContraint(constraint logLevelCons
 }
 
 // stackCallDepth is used to indicate the call depth of 'log' func.
-// This depth level is used in the runtime.Caller(...) call. See 
+// This depth level is used in the runtime.Caller(...) call. See
 // common_context.go -> specificContext, extractCallerInfo for details.
 func (cLogger *commonLogger) log(
 	level LogLevel,
 	message fmt.Stringer,
 	stackCallDepth int) {
+	cLogger.m.Lock()
+	defer cLogger.m.Unlock()
 
 	if cLogger.Closed() {
 		return
@@ -206,7 +279,7 @@ func (cLogger *commonLogger) log(
 	context, _ := specificContext(stackCallDepth)
 
 	// Context errors are not reported because there are situations
-	// in which context errors are normal Seelog usage cases. For 
+	// in which context errors are normal Seelog usage cases. For
 	// example in executables with stripped symbols.
 	// Error contexts are returned instead. See common_context.go.
 	/*if err != nil {
@@ -220,11 +293,11 @@ func (cLogger *commonLogger) log(
 func (cLogger *commonLogger) processLogMsg(
 	level LogLevel,
 	message fmt.Stringer,
-	context logContextInterface) {
+	context LogContextInterface) {
 
 	defer func() {
 		if err := recover(); err != nil {
-			fmt.Println(err)
+			reportInternalError(fmt.Errorf("Recovered from panic during message processing: %s", err))
 		}
 	}()
 
@@ -233,7 +306,7 @@ func (cLogger *commonLogger) processLogMsg(
 	}
 }
 
-func (cLogger *commonLogger) isAllowed(level LogLevel, context logContextInterface) bool {
+func (cLogger *commonLogger) isAllowed(level LogLevel, context LogContextInterface) bool {
 	funcMap, ok := cLogger.contextCache[context.FullPath()]
 	if !ok {
 		funcMap = make(map[string]map[LogLevel]bool, 0)
